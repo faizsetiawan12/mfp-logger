@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from mfp_logger.domain import MealInput, MealCategory, ConfidenceLevel
 from mfp_logger.workflow import MealLoggingWorkflow
-from mfp_logger.direct_mfp import DirectMFPClient
+from mfp_logger.cdp_bridge import WindowsChromeCDPBridge
 
 def main():
     parser = argparse.ArgumentParser(description="MFP Logger CLI")
@@ -25,17 +25,17 @@ def main():
     
     args = parser.parse_args()
 
-    client = DirectMFPClient()
+    bridge = WindowsChromeCDPBridge()
 
     if args.confirm and args.food:
         now_date = datetime.now(zoneinfo.ZoneInfo("Asia/Jakarta")).date()
-        client.log_meal(
+        bridge.log_meal_via_browser(
             food_name=args.food,
             calories=args.calories,
-            protein_g=args.protein,
-            carbs_g=args.carbs,
-            fat_g=args.fat,
-            diary_date=now_date,
+            protein=args.protein,
+            carbs=args.carbs,
+            fat=args.fat,
+            date_str=now_date.isoformat(),
             meal_name=args.meal
         )
         print("Status: succeeded")
