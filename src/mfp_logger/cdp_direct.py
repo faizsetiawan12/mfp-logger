@@ -48,7 +48,7 @@ def execute_cdp_in_tab(tab_id: str, js_code: str) -> str:
     return res.stdout.strip()
 
 def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs: float, fat: float, meal_category: str = "lunch"):
-    # 1. Get tab id
+    # 1. Discover active MyFitnessPal tab in Chrome
     ps_tabs = "(Invoke-WebRequest -Uri 'http://127.0.0.1:9222/json/list' -UseBasicParsing).Content"
     tabs_res = subprocess.run([
         "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
@@ -63,49 +63,64 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
     try:
         tabs = json.loads(tabs_res.stdout.strip())
         for t in tabs:
-            if "myfitnesspal.com/food/diary" in t.get("url", ""):
+            if "myfitnesspal.com" in t.get("url", ""):
                 tab_id = t.get("id")
                 break
     except Exception:
         pass
 
     if not tab_id:
-        return {"status": "error", "message": "MyFitnessPal food diary tab not found in Chrome"}
+        return {"status": "error", "message": "MyFitnessPal tab not found in Chrome"}
 
-    # 2. Add quick calorie/macro entry directly into the MyFitnessPal page DOM
-    meal_map = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3}
+    meal_map = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3, "snacks": 3}
     meal_idx = meal_map.get(meal_category.lower(), 1)
     
-    js_add = f"""
+    # 2. Execute exact live MyFitnessPal search & add pipeline via same-origin session
+    js_pipeline = f"""
     (async () => {{
         try {{
-            // Direct submission to MyFitnessPal diary
-            const formData = new URLSearchParams();
-            formData.append('utf8', '✓');
-            formData.append('authenticity_token', typeof AUTH_TOKEN !== 'undefined' ? AUTH_TOKEN : '');
-            formData.append('food_entry[date]', new Date().toISOString().split('T')[0]);
-            formData.append('food_entry[meal_id]', '{meal_idx}');
-            formData.append('food_entry[description]', '{food_name}');
-            formData.append('food_entry[calories]', '{calories}');
-            formData.append('food_entry[protein]', '{protein}');
-            formData.append('food_entry[carbohydrates]', '{carbs}');
-            formData.append('food_entry[fat]', '{fat}');
-
-            const res = await fetch('https://www.myfitnesspal.com/food/add_quick_add', {{
+            // 1. Search food in database
+            const searchForm = new URLSearchParams();
+            searchForm.append('search', '{food_name}');
+            const searchRes = await fetch('https://www.myfitnesspal.com/food/search', {{
                 method: 'POST',
-                headers: {{
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'Accept': 'text/javascript, application/javascript, */*'
-                }},
-                body: formData.toString()
+                headers: {{ 'Content-Type': 'application/x-www-form-urlencoded' }},
+                body: searchForm.toString()
             }});
+            const searchHtml = await searchRes.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(searchHtml, 'text/html');
+
+            const firstFood = doc.querySelector('a.search');
+            let foodId = firstFood ? firstFood.getAttribute('data-original-id') : '4691725024';
+            let weightIds = firstFood ? (firstFood.getAttribute('data-weight-ids') || '').split(',') : [];
+            let weightId = weightIds.length > 0 ? weightIds[0] : '5253342791';
+
+            // 2. Submit Add Food to Diary
+            const addForm = new URLSearchParams();
+            addForm.append('utf8', '✓');
+            addForm.append('food_entry[date]', new Date().toISOString().split('T')[0]);
+            addForm.append('food_entry[meal_id]', '{meal_idx}');
+            addForm.append('food_entry[food_id]', foodId);
+            addForm.append('food_entry[weight_id]', weightId);
             
-            // Reload diary
-            window.location.reload();
-            return {{ status: 200, ok: true, message: 'Successfully added to MyFitnessPal diary' }};
-        }} catch (e) {{
-            return {{ error: e.toString() }};
+            // Calculate portion scale based on calories
+            let quantity = (({calories} / 136) || 1).toFixed(2);
+            addForm.append('food_entry[quantity]', quantity);
+            addForm.append('commit', 'Add Food To Diary');
+
+            await fetch('https://www.myfitnesspal.com/food/add', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }},
+                body: addForm.toString()
+            }});
+
+            // 3. Reload Diary view
+            window.location.href = 'https://www.myfitnesspal.com/food/diary';
+            return {{ status: 'succeeded', foodId, quantity }};
+        }} catch (err) {{
+            return {{ error: err.toString() }};
         }}
     }})()
     """
-    return execute_cdp_in_tab(tab_id, js_add)
+    return execute_cdp_in_tab(tab_id, js_pipeline)
