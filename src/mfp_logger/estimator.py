@@ -6,9 +6,16 @@ class NutritionEstimator:
     
     def estimate(self, meal_input: MealInput) -> Tuple[List[FoodItem], ConfidenceLevel, Optional[str]]:
         text = (meal_input.text or "").strip().lower()
+        image_path = meal_input.image_path
         
-        # Check for explicit mystery / low confidence trigger
-        if "unknown" in text or "mystery" in text or "unclear" in text or "blurry" in text:
+        # Check for explicit mystery / low confidence trigger or blurry image
+        if (
+            "unknown" in text 
+            or "mystery" in text 
+            or "unclear" in text 
+            or "blurry" in text 
+            or (image_path and "blurry" in image_path.lower())
+        ):
             items = [
                 FoodItem(
                     name="Unidentified dish",
@@ -27,7 +34,6 @@ class NutritionEstimator:
 
         # Nutrition label override (highest precedence)
         if "label:" in text or "nutrition facts" in text:
-            # Example label parsing
             items = [
                 FoodItem(
                     name="Packaged Protein Bar",
@@ -60,7 +66,7 @@ class NutritionEstimator:
 
         # Standard food examples
         items = []
-        if "boiled egg" in text or "eggs" in text:
+        if "boiled egg" in text or "eggs" in text or (image_path and "egg" in image_path.lower()):
             items.append(
                 FoodItem(
                     name="Hard boiled egg",
@@ -88,10 +94,10 @@ class NutritionEstimator:
             )
 
         if not items:
-            # General fallback vision/text estimate
+            desc = meal_input.text or (f"Meal from image {image_path}" if image_path else "Meal item")
             items.append(
                 FoodItem(
-                    name=meal_input.text or "Meal item",
+                    name=desc,
                     portion_description="1 standard portion",
                     calories=300.0,
                     protein_g=15.0,

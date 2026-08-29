@@ -11,6 +11,7 @@ from mfp_logger.domain import (
 from mfp_logger.mfp_adapter import (
     MyFitnessPalAdapter,
     DiaryEntry,
+    DiarySubmissionPayload,
     SubmissionResult,
     SubmissionStatus,
 )
@@ -63,29 +64,29 @@ def test_missing_food_creates_private_custom_food_and_submits():
     mock_browser = MockBrowserContext()
     adapter = MyFitnessPalAdapter(browser_context=mock_browser, dry_run=False)
     
-    item = FoodItem(
+    payload = DiarySubmissionPayload(
+        food_id=None,
         name="Homemade Soto Ayam",
-        portion_description="1 bowl",
+        diary_date=date(2026, 8, 29),
+        meal_category=MealCategory.LUNCH,
+        weight_id=None,
+        quantity=1.0,
+        is_custom_food=True,
         calories=350.0,
         protein_g=25.0,
         carbs_g=30.0,
         fat_g=12.0,
-        evidence_source=EvidenceSource.VISION_ESTIMATE,
-        is_custom_food=True,
     )
     
-    res = adapter.submit_item(item, diary_date=date(2026, 8, 29), meal_category=MealCategory.LUNCH)
+    res = adapter.submit_diary_entry(payload)
     
     assert res.status == SubmissionStatus.SUCCEEDED
     assert len(mock_browser.custom_foods) == 1
-    # Custom food name contains estimate label and date
     assert "[Estimate 2026-08-29]" in mock_browser.custom_foods[0]["name"]
-    # Verified exactly 1 matching entry in diary
     assert len(mock_browser.diary) == 1
 
 def test_duplicate_preflight_detects_existing_entry():
     mock_browser = MockBrowserContext()
-    # Pre-populate diary
     mock_browser.diary.append(DiaryEntry(
         food_id="12345",
         diary_date=date(2026, 8, 29),
@@ -95,37 +96,45 @@ def test_duplicate_preflight_detects_existing_entry():
     ))
     
     adapter = MyFitnessPalAdapter(browser_context=mock_browser, dry_run=False)
-    item = FoodItem(
+    payload = DiarySubmissionPayload(
+        food_id="12345",
         name="Rolled Oats",
-        portion_description="1 cup",
+        diary_date=date(2026, 8, 29),
+        meal_category=MealCategory.BREAKFAST,
+        weight_id="99",
+        quantity=1.0,
+        is_custom_food=False,
         calories=150.0,
         protein_g=5.0,
         carbs_g=27.0,
         fat_g=3.0,
-        mfp_food_id="12345",
-        mfp_weight_id="99",
-        quantity=1.0,
     )
     
-    preflight = adapter.check_duplicate(item, diary_date=date(2026, 8, 29), meal_category=MealCategory.BREAKFAST)
+    preflight = adapter.check_duplicate(payload)
     assert preflight.is_duplicate is True
+    
+    # Submitting should detect duplicate
+    res = adapter.submit_diary_entry(payload)
+    assert res.status == SubmissionStatus.DUPLICATE_DETECTED
 
 def test_timeout_marks_submission_as_uncertain_never_blindly_retried():
     mock_browser = MockBrowserContext()
     mock_browser.timeout_network = True
     adapter = MyFitnessPalAdapter(browser_context=mock_browser, dry_run=False)
     
-    item = FoodItem(
+    payload = DiarySubmissionPayload(
+        food_id="12345",
         name="Rolled Oats",
-        portion_description="1 cup",
+        diary_date=date(2026, 8, 29),
+        meal_category=MealCategory.BREAKFAST,
+        weight_id="99",
+        quantity=1.0,
+        is_custom_food=False,
         calories=150.0,
         protein_g=5.0,
         carbs_g=27.0,
         fat_g=3.0,
-        mfp_food_id="12345",
-        mfp_weight_id="99",
-        quantity=1.0,
     )
     
-    res = adapter.submit_item(item, diary_date=date(2026, 8, 29), meal_category=MealCategory.BREAKFAST)
+    res = adapter.submit_diary_entry(payload)
     assert res.status == SubmissionStatus.UNCERTAIN

@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from uuid import uuid4
 
 class MealCategory(str, Enum):
     BREAKFAST = "breakfast"
@@ -71,6 +70,13 @@ class MealPreview:
     confidence: ConfidenceLevel
     created_at: datetime
     clarification_prompt: Optional[str] = None
+    user_id: str = "default_user"
+    image_path: Optional[str] = None
+    retain_recipe_photo: bool = False
+
+    @property
+    def preview_expiration(self) -> datetime:
+        return self.created_at + timedelta(hours=24)
 
     @property
     def total_calories(self) -> float:
@@ -95,3 +101,4 @@ class WorkflowResult:
     preview: Optional[MealPreview] = None
     message: str = ""
     error: Optional[str] = None
+    verification_details: Optional[Dict[str, Any]] = None
