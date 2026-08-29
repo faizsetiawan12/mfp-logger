@@ -1,6 +1,7 @@
 import subprocess
 import json
 import time
+import re
 
 def get_tab_id():
     ps_tabs = "(Invoke-WebRequest -Uri 'http://127.0.0.1:9222/json/list' -UseBasicParsing).Content"
@@ -73,17 +74,29 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
     meal_map = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3, "snacks": 3}
     meal_idx = meal_map.get(meal_category.lower(), 1)
 
+    # Extract target grams from name if specified (e.g. 500g -> 5.0 of 100g unit)
+    target_grams = None
+    match_grams = re.search(r'(\d+)\s*(?:g|gr|gram|grams)', food_name.lower())
+    if match_grams:
+        target_grams = float(match_grams.group(1))
+
+    # Clean query for search
+    clean_query = re.sub(r'\(.*?\)', '', food_name)
+    clean_query = re.sub(r'\b\d+\s*(?:g|gr|gram|grams|kg|oz|lbs?)\b', '', clean_query, flags=re.IGNORECASE).strip()
+    if not clean_query:
+        clean_query = food_name
+
     # 1. Open search page
     js_navigate = f"window.location.href = 'https://www.myfitnesspal.com/food/add_to_diary?meal={meal_idx}';"
     execute_cdp_in_tab(tab_id, js_navigate)
     time.sleep(2)
 
-    # 2. Search food item
+    # 2. Search clean food name
     js_search = f"""
     (() => {{
         const searchInput = document.querySelector('input#search, input[name="search"]');
         if (searchInput) {{
-            searchInput.value = '{food_name}';
+            searchInput.value = '{clean_query}';
             searchInput.form.submit();
         }}
     }})()
@@ -91,25 +104,42 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
     execute_cdp_in_tab(tab_id, js_search)
     time.sleep(2.5)
 
-    # 3. Select match, adjust number of servings to match target calories, and submit
-    js_select_and_add = f"""
-    (() => {{
+    # 3. Select match, wait for servings DOM to load, set exact quantity, then submit
+    js_click_match = """
+    (() => {
         const match = document.querySelector('ul#matching li a.search, a.search');
-        if (match) {{
+        if (match) {
             match.click();
-            setTimeout(() => {{
-                // Scale quantity based on 100g unit (approx 120 kcal per 100g)
-                const qtyInput = document.querySelector('input#food_entry_quantity, input[name*="quantity"]');
-                if (qtyInput && {calories} > 0) {{
-                    const calcQty = ({calories} / 110).toFixed(1);
-                    qtyInput.value = calcQty > 0 ? calcQty : '1';
-                }}
-                const addBtn = document.querySelector('#add_button, input[value*="Add Food"], button[type="submit"]');
-                if (addBtn) addBtn.click();
-            }}, 1500);
+            return { status: 'clicked' };
+        }
+        return { status: 'no_match' };
+    })()
+    """
+    execute_cdp_in_tab(tab_id, js_click_match)
+    time.sleep(2)
+
+    # Calculate exact quantity multiplier
+    qty_val = 1.0
+    if target_grams is not None:
+        qty_val = round(target_grams / 100.0, 1) # e.g. 500g / 100g = 5.0
+    elif calories > 0:
+        qty_val = round(calories / 110.0, 1)
+
+    js_set_qty_and_submit = f"""
+    (() => {{
+        const qtyInput = document.querySelector('input#food_entry_quantity, input[name*="quantity"]');
+        if (qtyInput) {{
+            qtyInput.value = '{qty_val}';
         }}
+        const addBtn = document.querySelector('#add_button, input[value*="Add Food"], button[type="submit"]');
+        if (addBtn) {{
+            addBtn.click();
+            return {{ status: 'submitted', qty: '{qty_val}' }};
+        }}
+        return {{ status: 'button_not_found' }};
     }})()
     """
-    execute_cdp_in_tab(tab_id, js_select_and_add)
+    execute_cdp_in_tab(tab_id, js_set_qty_and_submit)
     time.sleep(2.5)
-    return {"status": "succeeded", "message": f"Successfully added {food_name} to {meal_category} in MyFitnessPal"}
+
+    return {"status": "succeeded", "message": f"Successfully logged {food_name} ({qty_val}x portion) to {meal_category} in MyFitnessPal"}
