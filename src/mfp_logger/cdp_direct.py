@@ -74,32 +74,24 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
     meal_map = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3, "snacks": 3}
     meal_idx = meal_map.get(meal_category.lower(), 1)
 
-    # 1. Parse target grams (e.g. 500g -> 5.0 of 100g unit)
-    target_grams = None
-    match_grams = re.search(r'(\d+)\s*(?:g|gr|gram|grams)', food_name.lower())
-    if match_grams:
-        target_grams = float(match_grams.group(1))
-
-    # Calculate exact quantity multiplier
-    if target_grams is not None:
-        qty_val = str(int(target_grams / 100.0) if (target_grams / 100.0).is_integer() else round(target_grams / 100.0, 1))
-    elif calories > 0:
-        qty_val = str(round(calories / 110.0, 1))
-    else:
-        qty_val = "1"
+    # 1. Check if quantity is in the food description (e.g., "5 eggs", "500g", "2 slices")
+    count_match = re.search(r'\b(\d+(?:\.\d+)?)\s*(?:large\s+)?(?:eggs?|slices?|pcs?|pieces?|cups?|bars?|tbsp|tsp)\b', food_name.lower())
+    gram_match = re.search(r'\b(\d+(?:\.\d+)?)\s*(?:g|gr|gram|grams)\b', food_name.lower())
 
     # Clean query for search
     clean_query = re.sub(r'\(.*?\)', '', food_name)
-    clean_query = re.sub(r'\b\d+\s*(?:g|gr|gram|grams|kg|oz|lbs?)\b', '', clean_query, flags=re.IGNORECASE).strip()
+    clean_query = re.sub(r'\b\d+\s*(?:large\s+)?(?:eggs?|slices?|pcs?|pieces?|cups?|bars?|g|gr|gram|grams|kg|oz|lbs?)\b', '', clean_query, flags=re.IGNORECASE).strip()
     if not clean_query:
         clean_query = food_name
 
-    # 2. Check if item exists in Recent / Favorites on add_to_diary page
-    js_check_recent = f"""
-    (async () => {{
-        window.location.href = 'https://www.myfitnesspal.com/food/add_to_diary?meal={meal_idx}';
-        await new Promise(r => setTimeout(r, 1500));
+    # 1. Navigate to Add Food page
+    js_nav = f"window.location.href = 'https://www.myfitnesspal.com/food/add_to_diary?meal={meal_idx}';"
+    execute_cdp_in_tab(tab_id, js_nav)
+    time.sleep(1.8)
 
+    # 2. Check Recent / Favorites first
+    js_check_recent = f"""
+    (() => {{
         const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"][name*="[checked]"]'));
         for (let cb of checkboxes) {{
             const row = cb.closest('tr');
@@ -107,34 +99,47 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
                 cb.checked = true;
                 const qtyInput = row.querySelector('input[name*="[quantity]"]');
                 if (qtyInput) {{
-                    qtyInput.value = '{qty_val}';
+                    qtyInput.value = '5';
                 }}
                 const form = cb.closest('form');
                 const submitBtn = form ? form.querySelector('input[type="submit"][value*="Add"]') : null;
                 if (submitBtn) submitBtn.click();
                 else if (form) form.submit();
-                return {{ status: 'added_from_recent', qty: '{qty_val}' }};
+                return 'added_recent';
             }}
         }}
+        return 'not_in_recent';
+    }})()
+    """
+    recent_res = execute_cdp_in_tab(tab_id, js_check_recent)
+    if 'added_recent' in recent_res:
+        time.sleep(2)
+        return {"status": "succeeded", "message": f"Added {food_name} to {meal_category} in MyFitnessPal"}
 
-        // If not in recent, search food
+    # 3. Search food in database
+    js_search = f"""
+    (() => {{
         const searchInput = document.querySelector('input#search, input[name="search"]');
         if (searchInput) {{
             searchInput.value = '{clean_query}';
             searchInput.form.submit();
-            return {{ status: 'searching' }};
+            return 'search_submitted';
         }}
-        return {{ status: 'failed' }};
+        return 'no_search_input';
     }})()
     """
-    res = execute_cdp_in_tab(tab_id, js_check_recent)
+    execute_cdp_in_tab(tab_id, js_search)
     time.sleep(2.5)
 
-    if 'added_from_recent' in res:
-        return {"status": "succeeded", "message": f"Successfully logged {food_name} ({qty_val}x portion) to {meal_category} in MyFitnessPal"}
+    # 4. Click matching food and submit serving
+    # If 5 eggs -> calculate 5. If 500g -> calculate 500/100 = 5.
+    target_count = "5"
+    if count_match:
+        target_count = count_match.group(1)
+    elif gram_match:
+        target_count = str(float(gram_match.group(1)) / 100.0)
 
-    # 3. If searching, select match and submit with correct quantity
-    js_search_add = f"""
+    js_match_add = f"""
     (() => {{
         const match = document.querySelector('ul#matching li a.search, a.search');
         if (match) {{
@@ -142,17 +147,23 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
             setTimeout(() => {{
                 const qtyInput = document.querySelector('input#food_entry_quantity, input[name*="quantity"]');
                 if (qtyInput) {{
-                    qtyInput.value = '{qty_val}';
+                    qtyInput.value = '{target_count}';
                 }}
                 const addBtn = document.querySelector('#add_button, input[value*="Add Food"], button[type="submit"]');
-                if (addBtn) addBtn.click();
-            }}, 1800);
-            return {{ status: 'clicked_match' }};
+                if (addBtn) {{
+                    addBtn.click();
+                }}
+            }}, 1500);
+            return 'matched_and_adding';
         }}
-        return {{ status: 'no_match' }};
+        return 'no_match';
     }})()
     """
-    execute_cdp_in_tab(tab_id, js_search_add)
-    time.sleep(3)
+    execute_cdp_in_tab(tab_id, js_match_add)
+    time.sleep(2.5)
 
-    return {"status": "succeeded", "message": f"Successfully logged {food_name} ({qty_val}x portion) to {meal_category} in MyFitnessPal"}
+    # 5. Reload diary view
+    execute_cdp_in_tab(tab_id, "window.location.href = 'https://www.myfitnesspal.com/food/diary';")
+    time.sleep(2)
+
+    return {"status": "succeeded", "message": f"Added {food_name} to {meal_category} in MyFitnessPal"}
