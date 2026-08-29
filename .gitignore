@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+*.har
+*.sqlite
+*.sqlite3
+node_modules/
+dist/
+coverage/
+.DS_Store
