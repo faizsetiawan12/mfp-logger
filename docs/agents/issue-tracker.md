@@ -2,9 +2,9 @@
 
 Issues and PRDs live as GitHub issues. Use `gh` for all operations.
 
-## Status
+## Repository
 
-No GitHub remote is connected yet. Connect one before publishing tickets.
+GitHub repository: `faizsetiawan12/mfp-logger`.
 
 ## Conventions
 
