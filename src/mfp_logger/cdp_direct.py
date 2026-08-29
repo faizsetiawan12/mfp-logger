@@ -74,9 +74,12 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
     meal_map = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3, "snacks": 3}
     meal_idx = meal_map.get(meal_category.lower(), 1)
 
-    # 1. Check if quantity is in the food description (e.g., "5 eggs", "500g", "2 slices")
+    # Extract target piece count or grams
     count_match = re.search(r'\b(\d+(?:\.\d+)?)\s*(?:large\s+)?(?:eggs?|slices?|pcs?|pieces?|cups?|bars?|tbsp|tsp)\b', food_name.lower())
     gram_match = re.search(r'\b(\d+(?:\.\d+)?)\s*(?:g|gr|gram|grams)\b', food_name.lower())
+    
+    target_count = float(count_match.group(1)) if count_match else None
+    target_grams = float(gram_match.group(1)) if gram_match else None
 
     # Clean query for search
     clean_query = re.sub(r'\(.*?\)', '', food_name)
@@ -84,86 +87,73 @@ def add_food_to_mfp_diary(food_name: str, calories: float, protein: float, carbs
     if not clean_query:
         clean_query = food_name
 
-    # 1. Navigate to Add Food page
-    js_nav = f"window.location.href = 'https://www.myfitnesspal.com/food/add_to_diary?meal={meal_idx}';"
-    execute_cdp_in_tab(tab_id, js_nav)
+    # 1. Open search page
+    js_navigate = f"window.location.href = 'https://www.myfitnesspal.com/food/add_to_diary?meal={meal_idx}';"
+    execute_cdp_in_tab(tab_id, js_navigate)
     time.sleep(1.8)
 
-    # 2. Check Recent / Favorites first
-    js_check_recent = f"""
-    (() => {{
-        const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"][name*="[checked]"]'));
-        for (let cb of checkboxes) {{
-            const row = cb.closest('tr');
-            if (row && row.innerText.toLowerCase().includes('{clean_query.lower()}')) {{
-                cb.checked = true;
-                const qtyInput = row.querySelector('input[name*="[quantity]"]');
-                if (qtyInput) {{
-                    qtyInput.value = '5';
-                }}
-                const form = cb.closest('form');
-                const submitBtn = form ? form.querySelector('input[type="submit"][value*="Add"]') : null;
-                if (submitBtn) submitBtn.click();
-                else if (form) form.submit();
-                return 'added_recent';
-            }}
-        }}
-        return 'not_in_recent';
-    }})()
-    """
-    recent_res = execute_cdp_in_tab(tab_id, js_check_recent)
-    if 'added_recent' in recent_res:
-        time.sleep(2)
-        return {"status": "succeeded", "message": f"Added {food_name} to {meal_category} in MyFitnessPal"}
-
-    # 3. Search food in database
+    # 2. Search food item
     js_search = f"""
     (() => {{
         const searchInput = document.querySelector('input#search, input[name="search"]');
         if (searchInput) {{
             searchInput.value = '{clean_query}';
             searchInput.form.submit();
-            return 'search_submitted';
         }}
-        return 'no_search_input';
     }})()
     """
     execute_cdp_in_tab(tab_id, js_search)
     time.sleep(2.5)
 
-    # 4. Click matching food and submit serving
-    # If 5 eggs -> calculate 5. If 500g -> calculate 500/100 = 5.
-    target_count = "5"
-    if count_match:
-        target_count = count_match.group(1)
-    elif gram_match:
-        target_count = str(float(gram_match.group(1)) / 100.0)
-
-    js_match_add = f"""
+    # 3. Select match, inspect serving unit, calculate exact multiplier, and add
+    js_select_and_add = f"""
     (() => {{
+        // Find first search item
         const match = document.querySelector('ul#matching li a.search, a.search');
         if (match) {{
             match.click();
             setTimeout(() => {{
                 const qtyInput = document.querySelector('input#food_entry_quantity, input[name*="quantity"]');
+                const weightSelect = document.querySelector('select#food_entry_weight_id, select[name*="weight"]');
+                const selectedText = weightSelect && weightSelect.selectedOptions.length > 0 ? weightSelect.selectedOptions[0].text.toLowerCase() : (match.parentElement ? match.parentElement.innerText.toLowerCase() : '');
+                
+                let qty = 1.0;
+                const targetCount = {target_count if target_count is not None else 'null'};
+                const targetGrams = {target_grams if target_grams is not None else 'null'};
+                
+                if (targetCount !== null) {{
+                    // Check if unit is e.g. "3 whole egg" or "1 egg"
+                    const unitCountMatch = selectedText.match(/(\\d+(?:\\.\\d+)?)\\s*(?:whole\\s+)?(?:eggs?|slices?|pcs?|pieces?|cups?|bars?)/);
+                    if (unitCountMatch) {{
+                        const baseCount = parseFloat(unitCountMatch[1]);
+                        qty = targetCount / (baseCount > 0 ? baseCount : 1.0);
+                    }} else {{
+                        qty = targetCount;
+                    }}
+                }} else if (targetGrams !== null) {{
+                    if (selectedText.includes('100 g') || selectedText.includes('100g') || selectedText.includes('100 gram')) {{
+                        qty = targetGrams / 100.0;
+                    }} else if (selectedText.includes('1 g') || selectedText.includes('1g') || selectedText.includes('1 gram')) {{
+                        qty = targetGrams;
+                    }} else {{
+                        qty = targetGrams / 100.0;
+                    }}
+                }}
+
                 if (qtyInput) {{
-                    qtyInput.value = '{target_count}';
+                    qtyInput.value = (Math.round(qty * 10) / 10).toString();
                 }}
+                
                 const addBtn = document.querySelector('#add_button, input[value*="Add Food"], button[type="submit"]');
-                if (addBtn) {{
-                    addBtn.click();
-                }}
-            }}, 1500);
-            return 'matched_and_adding';
+                if (addBtn) addBtn.click();
+            }}, 1800);
         }}
-        return 'no_match';
     }})()
     """
-    execute_cdp_in_tab(tab_id, js_match_add)
-    time.sleep(2.5)
+    execute_cdp_in_tab(tab_id, js_select_and_add)
+    time.sleep(3)
 
-    # 5. Reload diary view
     execute_cdp_in_tab(tab_id, "window.location.href = 'https://www.myfitnesspal.com/food/diary';")
     time.sleep(2)
 
-    return {"status": "succeeded", "message": f"Added {food_name} to {meal_category} in MyFitnessPal"}
+    return {"status": "succeeded", "message": f"Successfully added {food_name} to {meal_category} in MyFitnessPal"}
