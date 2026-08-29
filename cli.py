@@ -15,7 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description="MFP Logger CLI")
     parser.add_argument("--text", type=str, help="Meal text description")
     parser.add_argument("--image", type=str, help="Meal image path")
-    parser.add_argument("--confirm", type=str, help="Confirm meal by text/id")
+    parser.add_argument("--confirm", type=str, nargs="?", const="yes", help="Confirm meal")
     parser.add_argument("--food", type=str, help="Food name")
     parser.add_argument("--calories", type=float, default=0.0, help="Calories")
     parser.add_argument("--protein", type=float, default=0.0, help="Protein (g)")
@@ -25,7 +25,8 @@ def main():
     
     args = parser.parse_args()
 
-    if args.confirm and args.food:
+    # If food is supplied, write to MyFitnessPal diary immediately
+    if args.food:
         now_date = datetime.now(zoneinfo.ZoneInfo("Asia/Jakarta")).date()
         result = add_food_to_mfp_diary(
             food_name=args.food,
