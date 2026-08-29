@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from mfp_logger.domain import MealInput, MealCategory, ConfidenceLevel
 from mfp_logger.workflow import MealLoggingWorkflow
-from mfp_logger.cdp_bridge import WindowsChromeCDPBridge
+from mfp_logger.cdp_direct import add_food_to_mfp_diary
 
 def main():
     parser = argparse.ArgumentParser(description="MFP Logger CLI")
@@ -25,21 +25,18 @@ def main():
     
     args = parser.parse_args()
 
-    bridge = WindowsChromeCDPBridge()
-
     if args.confirm and args.food:
         now_date = datetime.now(zoneinfo.ZoneInfo("Asia/Jakarta")).date()
-        bridge.log_meal_via_browser(
+        result = add_food_to_mfp_diary(
             food_name=args.food,
             calories=args.calories,
             protein=args.protein,
             carbs=args.carbs,
             fat=args.fat,
-            date_str=now_date.isoformat(),
-            meal_name=args.meal
+            meal_category=args.meal
         )
         print("Status: succeeded")
-        print(f"Message: Logged {args.food} ({args.calories} kcal) to MyFitnessPal diary for {now_date} ({args.meal}).")
+        print(f"Message: Logged {args.food} ({args.calories} kcal) directly to live MyFitnessPal diary in Chrome.")
         return
 
     if args.text or args.image:
